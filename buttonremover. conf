@@ -1,0 +1,95 @@
+if eof then
+    -- Concatenate all chunks
+    local whole = table.concat(ctx.buffered)
+    ctx.buffered = nil  -- Free memory
+
+    -- Modify the response body as needed
+    -- Example: Remove domains from URLs
+    whole = whole:gsub("https://files.scopedlens.com", "")
+
+    -- Remove the specified HTML snippet
+    local snippet_to_remove = '<button class="navbar%-toggler" type="button" data%-bs%-toggle="offcanvas" data%-bs%-target="#offcanvasNavbar2" aria%-controls="offcanvasNavbar2" aria%-label="Toggle navigation">%s*<span class="navbar%-toggler%-icon"></span>%s*</button>'
+    whole = whole:gsub(snippet_to_remove, "")
+
+    -- Send modified content to client
+    ngx.arg[1] = whole
+    ngx.arg[2] = true
+else
+    ngx.arg[1] = nil  -- Do not send partial chunks to client
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+http {
+    # Define shared dictionaries
+    lua_shared_dict cookie_store 1m;
+    lua_shared_dict group_names_dict 1m;
+
+    init_worker_by_lua_block {
+        -- Load the cookie_init module
+        local cookie_init = require("cookie_init")
+
+        -- Initialize the cookie store with predefined cookie groups
+        cookie_init.init_cookie_store(ngx.shared.cookie_store)
+
+        -- Store the list of cookie group names in the shared dictionary for access if needed
+        local group_names = ngx.shared.cookie_store:get_keys(0)
+        local cjson = require("cjson.safe")
+        ngx.shared.group_names_dict:set("group_names", cjson.encode(group_names))
+
+        -- Seed the random generator
+        math.randomseed(ngx.now() * 1000 + ngx.worker.pid())
+    }
+
+    server {
+        listen 80;
+
+        # Location to apply a random cookie group
+        location /apply_random_cookies {
+            content_by_lua_block {
+                local cookie_init = require("cookie_init")
+                
+                -- Select a random cookie group to be set in headers
+                cookie_init.select_random_cookie_group(ngx.shared.cookie_store)
+                
+                ngx.say("Selected random cookie group and set in headers.")
+            }
+
+            # Filter to set cookies in headers
+            header_filter_by_lua_block {
+                local cookies = ngx.ctx.selected_cookies
+                if cookies then
+                    local set_cookie_headers = {}
+                    for _, cookie in ipairs(cookies) do
+                        local cookie_str = cookie.name .. "=" .. cookie.value
+                        if cookie.expires then cookie_str = cookie_str .. "; Expires=" .. cookie.expires end
+                        if cookie.path then cookie_str = cookie_str .. "; Path=" .. cookie.path end
+                        if cookie.domain then cookie_str = cookie_str .. "; Domain=" .. cookie.domain end
+                        if cookie.secure then cookie_str = cookie_str .. "; Secure" end
+                        if cookie.http_only then cookie_str = cookie_str .. "; HttpOnly" end
+                        if cookie.same_site then cookie_str = cookie_str .. "; SameSite=" .. cookie.same_site end
+                        table.insert(set_cookie_headers, cookie_str)
+                    end
+                    ngx.header['Set-Cookie'] = set_cookie_headers
+                end
+            }
+        }
+    }
+}
